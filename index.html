@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Simfile Catalog → SMEditor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --pad: 16px; --radius: 12px; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+           margin: 0; color: #111; background: #f6f7fb; }
+    header { padding: var(--pad); background: #fff; position: sticky; top: 0; box-shadow: 0 1px 6px rgba(0,0,0,.05); }
+    h1 { margin: 0 0 8px 0; font-size: 1.1rem; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    input, select, button {
+      padding: 10px 12px; border-radius: 10px; border: 1px solid #d9dbe3; background: #fff;
+      font-size: 14px;
+    }
+    button { cursor: pointer; }
+    main { padding: var(--pad); max-width: 1100px; margin: 0 auto; }
+    .group { margin: 18px 0; }
+    .group h2 { font-size: 0.95rem; color: #444; margin: 10px 0; }
+    .card {
+      background: #fff; border: 1px solid #e6e7ef; border-radius: var(--radius);
+      padding: 12px; display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center;
+    }
+    .meta { display: flex; gap: 8px; align-items: baseline; }
+    .meta .pack { font-size: 12px; color: #666; }
+    .meta .song { font-weight: 600; }
+    .actions { display: flex; gap: 6px; }
+    .pill { font-size: 12px; background: #eef2ff; color: #3741a0; border: 1px solid #dfe5ff; padding: 2px 8px; border-radius: 999px; }
+    .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .count { margin-left: auto; color: #666; font-size: 12px; }
+    .footer { color: #777; font-size: 12px; text-align: center; padding: 24px; }
+    @media (max-width: 700px) {
+      .card { grid-template-columns: 1fr; }
+      .count { width: 100%; order: 3; text-align: left; margin: 6px 0 0; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="toolbar">
+      <h1>Simfile Catalog → SMEditor</h1>
+      <input id="search" type="search" placeholder="Search (pack, song, tags)" />
+      <select id="packFilter">
+        <option value="">All packs</option>
+      </select>
+      <button id="randomBtn" title="Open a random chart in SMEditor">Random</button>
+      <span class="count" id="count"></span>
+    </div>
+  </header>
+
+  <main>
+    <div id="list"></div>
+  </main>
+
+  <script>
+    // --- Configuration via query params or defaults ---
+    const qp = new URLSearchParams(location.search);
+    const songsUrl   = qp.get('songs')     || './songs.json';
+    const embedBase  = qp.get('embedBase') || 'https://tillvit.github.io/smeditor/app/';
+    // --------------------------------------------------
+
+    const els = {
+      list: document.getElementById('list'),
+      search: document.getElementById('search'),
+      packFilter: document.getElementById('packFilter'),
+      count: document.getElementById('count'),
+      randomBtn: document.getElementById('randomBtn'),
+    };
+
+    /** @typedef {{ pack: string, song: string, ssc?: string, sm?: string, tags?: string[] }} CatalogEntry */
+
+    /** Build the embed link */
+    function buildEmbedUrl(chartUrl) {
+      const u = new URL(embedBase);
+      u.searchParams.set('url', chartUrl); // auto-encodes
+      return u.toString();
+    }
+
+    /** Render the list grouped by pack */
+    function render(entries) {
+      // Group by pack
+      const byPack = new Map();
+      for (const e of entries) {
+        if (!byPack.has(e.pack)) byPack.set(e.pack, []);
+        byPack.get(e.pack).push(e);
+      }
+
+      // Populate pack filter
+      const packs = Array.from(byPack.keys()).sort((a,b)=>a.localeCompare(b));
+      els.packFilter.innerHTML = '<option value="">All packs</option>' + packs.map(p => `<option>${escapeHtml(p)}</option>`).join('');
+
+      // Draw groups
+      draw(entries, byPack);
+    }
+
+    function draw(entries, byPackMaybe) {
+      const searchVal = (els.search.value || '').toLowerCase().trim();
+      const packVal = els.packFilter.value || '';
+      const byPack = byPackMaybe || (() => {
+        const m = new Map();
+        for (const e of entries) { if (!m.has(e.pack)) m.set(e.pack, []); m.get(e.pack).push(e); }
+        return m;
+      })();
+
+      const packs = Array.from(byPack.keys()).sort((a,b)=>a.localeCompare(b));
+      let html = '';
+      let shown = 0;
+
+      for (const pack of packs) {
+        if (packVal && packVal !== pack) continue;
+        const group = byPack.get(pack).filter(e => filterEntry(e, searchVal));
+        if (!group.length) continue;
+
+        html += `<div class="group"><h2>${escapeHtml(pack)} <span class="pill">${group.length}</span></h2>`;
+        for (const e of group.sort((a,b)=>a.song.localeCompare(b.song))) {
+          shown++;
+          const chartUrl = e.ssc || e.sm;
+          const embedUrl = buildEmbedUrl(chartUrl);
+          const tagsText = (e.tags && e.tags.length) ? ` · ${e.tags.join(', ')}` : '';
+          html += `
+            <div class="card">
+              <div class="meta">
+                <div class="song">${escapeHtml(e.song)}</div>
+                <div class="pack">in ${escapeHtml(e.pack)}${escapeHtml(tagsText)}</div>
+              </div>
+              <div class="actions">
+                <button onclick="window.open('${embedUrl}', '_blank')">Open</button>
+                <button onclick="copyToClipboard('${embedUrl}', this)">Copy link</button>
+                <button title="Direct chart URL" onclick="copyToClipboard('${chartUrl}', this)">Copy .sm/.ssc</button>
+              </div>
+            </div>`;
+        }
+        html += `</div>`;
+      }
+
+      els.list.innerHTML = html || `<p>No matches.</p>`;
+      els.count.textContent = `${shown} chart${shown === 1 ? '' : 's'} shown`;
+    }
+
+    function filterEntry(e, q) {
+      if (!q) return true;
+      const hay = `${e.pack} ${e.song} ${(e.tags||[]).join(' ')}`.toLowerCase();
+      return hay.includes(q);
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    async function copyToClipboard(text, btn) {
+      try {
+        await navigator.clipboard.writeText(text);
+        const old = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(()=>btn.textContent = old, 900);
+      } catch {
+        alert('Copy failed. Select and copy manually:\n' + text);
+      }
+    }
+
+    // Wire up UI
+    els.search.addEventListener('input', () => draw(window.__ENTRIES__));
+    els.packFilter.addEventListener('change', () => draw(window.__ENTRIES__));
+    els.randomBtn.addEventListener('click', () => {
+      const arr = window.__ENTRIES__ || [];
+      if (!arr.length) return;
+      const pick = arr[Math.floor(Math.random()*arr.length)];
+      const chartUrl = pick.ssc || pick.sm;
+      window.open(buildEmbedUrl(chartUrl), '_blank');
+    });
+
+    // Boot
+    (async function () {
+      const res = await fetch(songsUrl, { cache: 'no-store' });
+      if (!res.ok) {
+        document.getElementById('list').innerHTML = `<p>Failed to load songs.json from ${escapeHtml(songsUrl)}</p>`;
+        return;
+      }
+      /** @type {CatalogEntry[]} */
+      let entries = await res.json();
+
+      // Normalize and basic validation
+      entries = entries
+        .map(e => ({
+          pack: e.pack?.trim(),
+          song: e.song?.trim(),
+          ssc: e.ssc?.trim(),
+          sm: e.sm?.trim(),
+          tags: Array.isArray(e.tags) ? e.tags : []
+        }))
+        .filter(e => e.pack && e.song && (e.ssc || e.sm));
+
+      window.__ENTRIES__ = entries;
+      render(entries);
+    })();
+  </script>
+</body>
+</html>
